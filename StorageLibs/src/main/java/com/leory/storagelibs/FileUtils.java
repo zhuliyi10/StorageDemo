@@ -1,4 +1,4 @@
-package com.leory.storagedemo;
+package com.leory.storagelibs;
 
 import android.content.Context;
 import android.content.res.AssetFileDescriptor;
@@ -24,13 +24,15 @@ public class FileUtils {
      */
     public static boolean isFileExists(Context context, final String filePath) {
         File file = getFileByPath(filePath);
+        return isFileExists(context,file);
+    }
+    public static boolean isFileExists(Context context, File file) {
         if (file == null) return false;
         if (file.exists()) {
             return true;
         }
-        return isFileExistsApi29(context, filePath);
+        return isFileExistsApi29(context, file.getPath());
     }
-
     private static boolean isFileExistsApi29(Context context, String filePath) {
         if (Build.VERSION.SDK_INT >= 29) {
             try {

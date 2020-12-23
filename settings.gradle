@@ -1,2 +1,3 @@
+include ':StorageLibs'
 include ':app'
 rootProject.name = "StorageDemo"

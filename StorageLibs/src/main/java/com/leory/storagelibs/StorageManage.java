@@ -1,13 +1,16 @@
-package com.leory.storagedemo;
+package com.leory.storagelibs;
 
 import android.content.ContentUris;
 import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.os.Handler;
 import android.provider.MediaStore;
 import android.util.Log;
 
@@ -32,52 +35,57 @@ public class StorageManage {
     private static long dealFileCount;
     private static long srcFileCount;
     private static final String TAG = StorageManage.class.getSimpleName();
+    private static MediaScannerConnection mScanner;
 
     /**
-     * 保存图片到共享空间
-     *
      * @param context
      * @param bitmap
-     * @param relativePath 保存相对目录，共享空间的根目录只能是
-     *                     <ul>
-     *                       <li>{@link Environment#DIRECTORY_MUSIC}
-     *                       <li>{@link Environment#DIRECTORY_PODCASTS}
-     *                       <li>{@link Environment#DIRECTORY_ALARMS}
-     *                       <li>{@link Environment#DIRECTORY_RINGTONES}
-     *                       <li>{@link Environment#DIRECTORY_NOTIFICATIONS}
-     *                       <li>{@link Environment#DIRECTORY_PICTURES}
-     *                       <li>{@link Environment#DIRECTORY_MOVIES}
-     *                       <li>{@link Environment#DIRECTORY_DOWNLOADS}
-     *                       <li>{@link Environment#DIRECTORY_DCIM}
-     *                       <li>{@link Environment#DIRECTORY_DOCUMENTS}
-     *                       <li>{@link Environment#DIRECTORY_AUDIOBOOKS}
-     *                     </ul>
-     * @return
+     * @param appRootName app根目录名称
+     * @param fileName    文件名，带后缀
+     * @return 返回图片的路径
      */
-    public static boolean saveImageToShare(Context context, Bitmap bitmap, String fileName, String relativePath) {
+    public static String saveBitmapToPublic(Context context, Bitmap bitmap, String appRootName, String fileName) {
+        return saveBitmapToPublic(context, bitmap, appRootName, fileName, 100);
+    }
+
+    public static String saveBitmapToPublic(Context context, Bitmap bitmap, String appRootName, String fileName, int quality) {
+        String imageType = "image/jpeg";
+        Bitmap.CompressFormat format = Bitmap.CompressFormat.JPEG;//压缩格式
+        if (fileName.endsWith("png")) {
+            format = Bitmap.CompressFormat.PNG;
+            imageType = "image/png";
+        }
         ContentValues contentValues = new ContentValues();
         contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
-        contentValues.put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg");
+        contentValues.put(MediaStore.MediaColumns.MIME_TYPE, imageType);
+        String path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM) + File.separator + appRootName;
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            String path = Environment.getExternalStorageDirectory().getAbsolutePath() + File.separator + relativePath;
             File dir = new File(path);
             if (!dir.exists()) {
                 Log.d(TAG, "创建目录 " + dir.mkdirs());
             }
-            contentValues.put(MediaStore.MediaColumns.DATA, path + fileName);//添加全路径
+            contentValues.put(MediaStore.MediaColumns.DATA, path + File.separator + fileName);//添加全路径
         } else {
-            contentValues.put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath);
+            contentValues.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DCIM + File.separator + appRootName);
         }
         Uri uri = context.getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues);
         if (uri != null) {
             try {
                 OutputStream outputStream = context.getContentResolver().openOutputStream(uri);
                 if (outputStream != null) {
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream);
+                    bitmap.compress(format, quality, outputStream);
                     outputStream.flush();
                     outputStream.close();
-                    Log.d(TAG, "添加图片成功");
-                    return true;
+                    Log.d(TAG, "图片保存成功" + (path + File.separator + fileName));
+                    MediaScannerConnection.scanFile(context, new String[]{(path + File.separator + fileName)},
+                            null, new MediaScannerConnection.OnScanCompletedListener() {
+                                @Override
+                                public void onScanCompleted(String path, Uri uri) {
+                                    Log.d(TAG, "onScanCompleted: uri=" + uri);
+                                    Log.d(TAG, "onScanCompleted: " + path);
+                                }
+                            });
+                    return path + File.separator + fileName;
 
                 }
             } catch (FileNotFoundException e) {
@@ -86,9 +94,71 @@ public class StorageManage {
                 e.printStackTrace();
             }
         }
-        return false;
+        return null;
+
     }
 
+    /**
+     * 通过路径获取媒体的uri
+     *
+     * @param context
+     * @param path
+     * @return
+     */
+    public static Uri getMediaUriFromPath(Context context, String path) {
+        Uri mediaUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+        Cursor cursor = context.getContentResolver().query(mediaUri,
+                null,
+                MediaStore.Images.Media.DISPLAY_NAME + "= ?",
+                new String[]{path.substring(path.lastIndexOf("/") + 1)},
+                null);
+
+        Uri uri = null;
+        if (cursor.moveToFirst()) {
+            uri = ContentUris.withAppendedId(mediaUri,
+                    cursor.getLong(cursor.getColumnIndex(MediaStore.Images.Media._ID)));
+        }
+        cursor.close();
+        return uri;
+    }
+
+    /**
+     * 通过mediaUri获取bitmap
+     *
+     * @param context
+     * @param uri
+     * @return
+     */
+    public static Bitmap getBitmapFromMediaUri(Context context, Uri uri) {
+        if (uri == null) return null;
+        Bitmap bitmap = null;
+        try {
+            bitmap = BitmapFactory.decodeStream(context.getContentResolver().openInputStream(uri));
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        }
+        return bitmap;
+    }
+
+    /**
+     * 根据media uri获取path
+     *
+     * @param context
+     * @param uri
+     * @return
+     */
+    public static String getPathFromMediaUri(Context context, Uri uri) {
+        String path = null;
+        Cursor cursor = context.getContentResolver().query(uri, null, null, null, null);
+        if (cursor != null) {
+            if (cursor.moveToFirst()) {
+                path = cursor.getString(cursor.getColumnIndex(MediaStore.Images.Media.DATA));
+            }
+
+            cursor.close();
+        }
+        return path;
+    }
 
     /**
      * 获取图片列表
@@ -172,33 +242,62 @@ public class StorageManage {
 
     /**
      * 把android 原外部数据移动到用户私有空间
+     * 在主线程中调用此方法
      *
      * @param srcPath  源文件夹
      * @param destPath 目标文件夹
      * @return
      */
     public static boolean moveExternalStorageToPrivate(String srcPath, String destPath, onStorageMoveListener listener) {
-        if (srcPath == null || destPath == null) return false;
+        Handler mainHandler = new Handler();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            Log.d(TAG, "isExternalStorageLegacy: " + Environment.isExternalStorageLegacy());
+            if (!Environment.isExternalStorageLegacy()) {//采用分区，不能读写外部数据
+                listener.noNeedMove();
+                return false;
+            }
+        }
+        if (srcPath == null || destPath == null) {
+            listener.noNeedMove();
+            return false;
+        }
+
         srcFileCount = FileUtils.getFileCount(srcPath);
         long destFileCount = FileUtils.getFileCount(destPath);
-        //如果目标文件夹已经有文件，或者源文件夹没有文件，则不需要迁移数据
-        if (destFileCount != 0 || srcFileCount == 0) return false;
+        //如果源文件夹没有文件，则不需要迁移数据
+        if (srcFileCount == 0) {
+            listener.noNeedMove();
+            return false;
+        }
+        listener.onMoveBegin();
         File srcDir = FileUtils.getFileByPath(srcPath);
         File destDir = FileUtils.getFileByPath(destPath);
         dealFileCount = 0;
-        moveDir(srcDir, destDir, listener);
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                moveDir(mainHandler, srcDir, destDir, listener);
+                Log.d(TAG, "迁移成功了");
+                mainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        listener.onMoveEnd();
+                    }
+                });
 
-        Log.d(TAG, "迁移成功了");
+            }
+        }).start();
         return true;
     }
 
     /**
      * 移动文件夹
      *
+     * @param mainHandler 主线程handler
      * @param srcDir
      * @param destDir
      */
-    private static void moveDir(File srcDir, File destDir, onStorageMoveListener listener) {
+    private static void moveDir(Handler mainHandler, File srcDir, File destDir, onStorageMoveListener listener) {
         String destPath = destDir.getPath() + File.separator;
         FileUtils.createOrExistsDir(destPath);
         if (!srcDir.isDirectory() || !destDir.isDirectory()) return;
@@ -206,13 +305,18 @@ public class StorageManage {
         for (File file : files) {
             File oneDestFile = new File(destPath + file.getName());
             if (file.isDirectory()) {
-                moveDir(file, oneDestFile, listener);
+                moveDir(mainHandler, file, oneDestFile, listener);
             } else {
                 dealFileCount++;
                 Log.d(TAG, "正在移动第" + dealFileCount + "个文件");
                 if (srcFileCount != 0) {
                     float progress = 1f * dealFileCount / srcFileCount;
-                    listener.onProgressUpgrade(progress);
+                    mainHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            listener.onProgressUpgrade(progress);
+                        }
+                    });
                     Log.d(TAG, "当前的进度: " + progress);
                 }
                 copyFile(file, oneDestFile);
@@ -250,8 +354,16 @@ public class StorageManage {
 
     /**
      * 数据移动监听器
+     * 所有的回调都在主线程中
      */
     public interface onStorageMoveListener {
-        void onProgressUpgrade(float progress);
+        void noNeedMove();//不需要移动
+
+        void onProgressUpgrade(float progress);//移动中，progress百分比
+
+        void onMoveBegin();//开始移动
+
+        void onMoveEnd();//移动结束
+
     }
 }
